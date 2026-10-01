@@ -1,5 +1,6 @@
 # ⚡ TouchpadTurbo (触摸板极速倍增调节器)
 
+[![GitHub Release](https://img.shields.io/github/v/release/NoelJudeNoel/TouchpadTurbo?color=brightgreen)](https://github.com/NoelJudeNoel/TouchpadTurbo/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue.svg)](https://microsoft.com)
 [![Runtime](https://img.shields.io/badge/.NET-4.5%2B%20(Built--in)-green.svg)](https://dotnet.microsoft.com)
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)]()
@@ -9,6 +10,16 @@
 
 <p align="center">
   <img src="docs/preview.png" alt="TouchpadTurbo 调节面板" width="450">
+</p>
+
+<p align="center">
+  <a href="https://github.com/NoelJudeNoel/TouchpadTurbo/releases/latest/download/TouchpadTurbo.exe">
+    <img src="https://img.shields.io/badge/Download-TouchpadTurbo.exe%20(Green%20Binary)-00B4D8?style=for-the-badge&logo=windows&logoColor=white" alt="Download EXE">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/NoelJudeNoel/TouchpadTurbo/releases/latest/download/TouchpadTurbo-v1.0.0-windows.zip">
+    <img src="https://img.shields.io/badge/Download-Complete%20Zip%20Package-2EC4B6?style=for-the-badge&logo=github&logoColor=white" alt="Download Zip">
+  </a>
 </p>
 
 ---
