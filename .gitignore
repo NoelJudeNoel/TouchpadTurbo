@@ -1,0 +1,13 @@
+# Build artifacts
+*.obj
+*.pdb
+*.log
+*.tmp
+
+# User configuration
+config.ini
+
+# IDE files
+.vs/
+.vscode/
+bin/*.pdb
