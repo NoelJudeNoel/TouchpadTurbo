@@ -13,7 +13,18 @@ namespace TouchpadTurbo
         // --- Win32 Hook Constants & Structs ---
         private const int WH_MOUSE_LL = 14;
         private const int WM_MOUSEMOVE = 0x0200;
+        private const int WM_LBUTTONDOWN = 0x0201;
+        private const int WM_LBUTTONUP = 0x0202;
+        private const int WM_RBUTTONDOWN = 0x0204;
+        private const int WM_RBUTTONUP = 0x0205;
+        private const int WM_MBUTTONDOWN = 0x0207;
+        private const int WM_MBUTTONUP = 0x0208;
         private const int WM_HOTKEY = 0x0312;
+
+        private const int VK_LBUTTON = 0x01;
+        private const int VK_RBUTTON = 0x02;
+        private const int VK_MBUTTON = 0x04;
+
         private const uint LLMHF_INJECTED = 0x0001;
         private const uint MAGIC_ID = 0x54555242; // "TURB"
 
@@ -49,6 +60,9 @@ namespace TouchpadTurbo
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
 
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -65,6 +79,8 @@ namespace TouchpadTurbo
         public static double BaseMultiplier = 2.8;
         public static double FlickBoost = 3.5;
         public static bool PrecisionMode = true;
+        public static bool ClickProtect = true;
+        public static bool SwipeTapFilter = true;
         public static bool IsEnabled = true;
 
         private static IntPtr _hookID = IntPtr.Zero;
@@ -72,6 +88,14 @@ namespace TouchpadTurbo
         private static GCHandle _gcHandle;
         private static POINT _lastPt;
         private static bool _hasPt = false;
+
+        // Button state & filter tracking
+        private static bool _isButtonDown = false;
+        private static int _buttonUpTime = 0;
+        private static int _lastFastMoveTime = 0;
+        private static double _lastFastMoveDist = 0;
+        private static bool _dropNextLButtonUp = false;
+        private static int _dropTime = 0;
 
         private static readonly string ConfigPath = @"C:\Tools\TouchpadTurbo\config.ini";
 
@@ -89,7 +113,11 @@ namespace TouchpadTurbo
         private TrackBar _tbBase;
         private TrackBar _tbFlick;
         private CheckBox _chkPrecision;
+        private CheckBox _chkClickProtect;
+        private CheckBox _chkSwipeTapFilter;
         private CheckBox _chkAutoStart;
+        private Label _lblTouchpadAAP;
+        private Button _btnOptimizeAAP;
         private Button _btnToggle;
 
         public MainForm()
@@ -119,8 +147,8 @@ namespace TouchpadTurbo
 
         private void BuildUI()
         {
-            this.Text = "TouchpadTurbo - 触摸板极速倍增调节器";
-            this.ClientSize = new Size(S(500), S(580));
+            this.Text = "TouchpadTurbo - 触摸板极速倍增调节器 v1.1";
+            this.ClientSize = new Size(S(500), S(600));
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -145,7 +173,7 @@ namespace TouchpadTurbo
             };
             var lblSubtitle = new Label
             {
-                Text = "专为蓝牙触摸板 + 2.5K/4K 高分屏打造的物理倍增引擎",
+                Text = "专为蓝牙触摸板 + 2.5K/4K 高分屏打造的物理倍增引擎 (防失焦/防误触强化版)",
                 Font = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(160, 160, 175),
                 Location = new Point(S(22), S(42)),
@@ -155,7 +183,7 @@ namespace TouchpadTurbo
             pnlHeader.Controls.Add(lblSubtitle);
             this.Controls.Add(pnlHeader);
 
-            int curY = S(84);
+            int curY = S(82);
             int cardW = S(460);
             int cardX = S(20);
 
@@ -209,7 +237,7 @@ namespace TouchpadTurbo
             grpBase.Controls.Add(_lblBaseSub);
             this.Controls.Add(grpBase);
 
-            curY += S(122);
+            curY += S(120);
 
             // 3. Card 2: Flick Acceleration
             var grpFlick = CreateCard(cardX, curY, cardW, S(110));
@@ -260,52 +288,127 @@ namespace TouchpadTurbo
             grpFlick.Controls.Add(_lblFlickSub);
             this.Controls.Add(grpFlick);
 
-            curY += S(122);
+            curY += S(120);
 
-            // 4. Card 3: Modes & Options
-            var grpOpt = CreateCard(cardX, curY, cardW, S(110));
+            // 4. Card 3: Modes & Anti-Interference Protections
+            var grpOpt = CreateCard(cardX, curY, cardW, S(206));
+
+            _chkClickProtect = new CheckBox
+            {
+                Text = "点击 / 拖拽原生保护 (按住按键自动1:1原生，彻底修复Ditto剪贴板与选区)",
+                Checked = ClickProtect,
+                Location = new Point(S(14), S(10)),
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 8.8f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(100, 220, 240)
+            };
+            _chkClickProtect.CheckedChanged += (s, e) => { ClickProtect = _chkClickProtect.Checked; SaveConfig(); };
+
+            _chkSwipeTapFilter = new CheckBox
+            {
+                Text = "快速划过防误点击 (滑动时阻断偶发误触轻击，防止看视频误暂停/失焦)",
+                Checked = SwipeTapFilter,
+                Location = new Point(S(14), S(34)),
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 8.8f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(255, 205, 110)
+            };
+            _chkSwipeTapFilter.CheckedChanged += (s, e) => { SwipeTapFilter = _chkSwipeTapFilter.Checked; SaveConfig(); };
+
             _chkPrecision = new CheckBox
             {
-                Text = "启用微操智能平抑 (慢移自动平稳，方便精准选中文字)",
+                Text = "微操智能平抑 (慢移微动自动平稳，方便精准微调选中)",
                 Checked = PrecisionMode,
-                Location = new Point(S(14), S(12)),
+                Location = new Point(S(14), S(58)),
                 AutoSize = true,
-                Font = new Font("Microsoft YaHei UI", 9.0f),
+                Font = new Font("Microsoft YaHei UI", 8.8f),
                 ForeColor = Color.FromArgb(220, 220, 230)
             };
             _chkPrecision.CheckedChanged += (s, e) => { PrecisionMode = _chkPrecision.Checked; SaveConfig(); };
 
             _chkAutoStart = new CheckBox
             {
-                Text = "开机静默自启动 (保持后台持续接管生效)",
-                Checked = true,
-                Location = new Point(S(14), S(42)),
+                Text = "开机静默自启动 (登录后后台持续生效)",
+                Checked = IsAutoStartEnabled(),
+                Location = new Point(S(14), S(82)),
                 AutoSize = true,
-                Font = new Font("Microsoft YaHei UI", 9.0f),
+                Font = new Font("Microsoft YaHei UI", 8.8f),
                 ForeColor = Color.FromArgb(220, 220, 230)
             };
             _chkAutoStart.CheckedChanged += (s, e) => { SetAutoStart(_chkAutoStart.Checked); };
 
-            var lblHotkeyHint = new Label
+            // AAP Touchpad Sensitivity status row
+            int currentAAP = GetTouchpadSensitivity();
+            _lblTouchpadAAP = new Label
             {
-                Text = "提示: 键盘随时按下 [ Ctrl + Alt + End ] 可一键暂停/恢复",
-                Location = new Point(S(14), S(75)),
+                Text = string.Format("系统触摸板灵敏度: {0}", currentAAP == 0 ? "最灵敏 (AAP=0, 极易误触)" : (currentAAP == 1 ? "高灵敏度" : "标准推荐 (AAP=2)")),
+                Location = new Point(S(14), S(112)),
                 AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 8.5f),
+                ForeColor = (currentAAP == 0 ? Color.FromArgb(255, 138, 128) : Color.FromArgb(129, 199, 132))
+            };
+
+            _btnOptimizeAAP = new Button
+            {
+                Text = (currentAAP == 0 ? "一键设为标准推荐 (AAP=2)" : "设为最灵敏 (AAP=0)"),
+                Location = new Point(cardW - S(190), S(108)),
+                Size = new Size(S(175), S(26)),
+                FlatStyle = FlatStyle.Flat,
                 Font = new Font("Microsoft YaHei UI", 8.2f),
+                BackColor = Color.FromArgb(48, 52, 70),
+                ForeColor = Color.White
+            };
+            _btnOptimizeAAP.Click += (s, e) =>
+            {
+                int nowAAP = GetTouchpadSensitivity();
+                int targetAAP = (nowAAP == 0) ? 2 : 0;
+                SetTouchpadSensitivity(targetAAP);
+                int updatedAAP = GetTouchpadSensitivity();
+                _lblTouchpadAAP.Text = string.Format("系统触摸板灵敏度: {0}", updatedAAP == 0 ? "最灵敏 (AAP=0, 极易误触)" : "标准推荐 (AAP=2)");
+                _lblTouchpadAAP.ForeColor = (updatedAAP == 0 ? Color.FromArgb(255, 138, 128) : Color.FromArgb(129, 199, 132));
+                _btnOptimizeAAP.Text = (updatedAAP == 0 ? "一键设为标准推荐 (AAP=2)" : "设为最灵敏 (AAP=0)");
+                MessageBox.Show(
+                    targetAAP == 2 
+                        ? "已将 Windows 系统触摸板防误触优化为 [标准推荐 (AAP=2)]！\n注: 该项由系统触摸板驱动读取，注销或重启后系统级完全生效。"
+                        : "已切换为 [最灵敏 (AAP=0)]。\n注: 最灵敏模式下手掌轻触或划过容易被系统驱动误判为轻击。",
+                    "触摸板灵敏度设置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
+            var lblAAPTip = new Label
+            {
+                Text = "说明: 极灵敏(AAP=0)易在滑动抬指时被系统驱动误判为轻击；配合本软件倍增已无需超敏。",
+                Location = new Point(S(14), S(140)),
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 7.8f),
                 ForeColor = Color.FromArgb(140, 140, 160)
             };
+
+            var lblHotkeyHint = new Label
+            {
+                Text = "提示: 键盘随时按下 [ Ctrl + Alt + End ] 可一键暂停/恢复倍增",
+                Location = new Point(S(14), S(175)),
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 8.2f),
+                ForeColor = Color.FromArgb(160, 160, 185)
+            };
+
+            grpOpt.Controls.Add(_chkClickProtect);
+            grpOpt.Controls.Add(_chkSwipeTapFilter);
             grpOpt.Controls.Add(_chkPrecision);
             grpOpt.Controls.Add(_chkAutoStart);
+            grpOpt.Controls.Add(_lblTouchpadAAP);
+            grpOpt.Controls.Add(_btnOptimizeAAP);
+            grpOpt.Controls.Add(lblAAPTip);
             grpOpt.Controls.Add(lblHotkeyHint);
             this.Controls.Add(grpOpt);
 
-            curY += S(124);
+            curY += S(216);
 
             // 5. Bottom Status and Action Buttons
             _lblStatus = new Label
             {
                 Text = "● 状态: 倍增中",
-                Location = new Point(S(22), curY + S(8)),
+                Location = new Point(S(22), curY + S(6)),
                 Size = new Size(S(160), S(30)),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold),
@@ -327,6 +430,7 @@ namespace TouchpadTurbo
             {
                 IsEnabled = !IsEnabled;
                 UpdateStatus();
+                SaveConfig();
             };
             this.Controls.Add(_btnToggle);
 
@@ -393,7 +497,7 @@ namespace TouchpadTurbo
             menu.Items.Add(titleItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            double[] presets = new double[] { 2.0, 2.5, 2.8, 3.2, 4.0, 5.0 };
+            double[] presets = new double[] { 1.5, 2.0, 2.5, 2.8, 3.2, 4.0 };
             foreach (var preset in presets)
             {
                 double p = preset;
@@ -411,10 +515,31 @@ namespace TouchpadTurbo
 
             menu.Items.Add(new ToolStripSeparator());
 
+            var protectItem = new ToolStripMenuItem("点击/拖拽原生保护 (防止Ditto等失效)", null, (s, e) =>
+            {
+                ClickProtect = !ClickProtect;
+                ((ToolStripMenuItem)s).Checked = ClickProtect;
+                if (_chkClickProtect != null) _chkClickProtect.Checked = ClickProtect;
+                SaveConfig();
+            }) { Checked = ClickProtect };
+            menu.Items.Add(protectItem);
+
+            var filterItem = new ToolStripMenuItem("滑动防误点击 (防止看视频等误暂停)", null, (s, e) =>
+            {
+                SwipeTapFilter = !SwipeTapFilter;
+                ((ToolStripMenuItem)s).Checked = SwipeTapFilter;
+                if (_chkSwipeTapFilter != null) _chkSwipeTapFilter.Checked = SwipeTapFilter;
+                SaveConfig();
+            }) { Checked = SwipeTapFilter };
+            menu.Items.Add(filterItem);
+
+            menu.Items.Add(new ToolStripSeparator());
+
             var toggleItem = new ToolStripMenuItem("启用 / 暂停倍增 (Ctrl+Alt+End)", null, (s, e) =>
             {
                 IsEnabled = !IsEnabled;
                 UpdateStatus();
+                SaveConfig();
             });
             menu.Items.Add(toggleItem);
 
@@ -454,6 +579,7 @@ namespace TouchpadTurbo
             {
                 IsEnabled = !IsEnabled;
                 UpdateStatus();
+                SaveConfig();
             }
             base.WndProc(ref m);
         }
@@ -496,59 +622,147 @@ namespace TouchpadTurbo
         // --- Low-Level Hook Callback ---
         private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEMOVE)
+            if (nCode >= 0)
             {
-                var s = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                int msg = wParam.ToInt32();
+                int now = Environment.TickCount;
 
-                if ((s.flags & LLMHF_INJECTED) != 0 || ((uint)s.dwExtraInfo.ToUInt64() == MAGIC_ID))
+                // 1. Ghost-Tap Suppression on high-speed swipes
+                if (SwipeTapFilter && msg == WM_LBUTTONDOWN)
                 {
-                    _lastPt = s.pt;
-                    return CallNextHookEx(_hookID, nCode, wParam, lParam);
-                }
-
-                if (!IsEnabled)
-                {
-                    _lastPt = s.pt;
-                    return CallNextHookEx(_hookID, nCode, wParam, lParam);
-                }
-
-                if (_hasPt)
-                {
-                    int dx = s.pt.x - _lastPt.x;
-                    int dy = s.pt.y - _lastPt.y;
-
-                    if (dx != 0 || dy != 0)
+                    // If the cursor was in high-speed motion within 45ms (dist >= 7.0px):
+                    // This is an accidental tap triggered by lifting finger at the end of a swipe stroke.
+                    if (unchecked(now - _lastFastMoveTime) < 45 && _lastFastMoveDist >= 7.0)
                     {
-                        double dist = Math.Sqrt(dx * dx + dy * dy);
-                        double mult = BaseMultiplier;
+                        _dropNextLButtonUp = true;
+                        _dropTime = now;
+                        return (IntPtr)1; // Drop the ghost click!
+                    }
+                }
+                else if (msg == WM_LBUTTONUP)
+                {
+                    if (_dropNextLButtonUp && unchecked(now - _dropTime) < 350)
+                    {
+                        _dropNextLButtonUp = false;
+                        return (IntPtr)1; // Drop the matching ghost release!
+                    }
+                    _dropNextLButtonUp = false;
+                }
 
-                        if (PrecisionMode && dist <= 1.5)
-                        {
-                            mult = 1.3; // Micro-movement precision hold
-                        }
-                        else
-                        {
-                            if (FlickBoost > 0 && dist > 1.5)
-                            {
-                                mult += Math.Min(FlickBoost, (dist - 1.5) * 0.45);
-                            }
-                        }
+                // 2. Track Mouse Button States
+                if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)
+                {
+                    _isButtonDown = true;
+                }
+                else if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP)
+                {
+                    _isButtonDown = false;
+                    _buttonUpTime = now;
+                }
 
-                        int extra_x = (int)Math.Round(dx * (mult - 1.0));
-                        int extra_y = (int)Math.Round(dy * (mult - 1.0));
+                // 3. Process WM_MOUSEMOVE
+                if (msg == WM_MOUSEMOVE)
+                {
+                    var s = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
 
-                        if (extra_x != 0 || extra_y != 0)
+                    // Ignore synthetic events injected by TouchpadTurbo
+                    if ((s.flags & LLMHF_INJECTED) != 0 || ((uint)s.dwExtraInfo.ToUInt64() == MAGIC_ID))
+                    {
+                        _lastPt = s.pt;
+                        return CallNextHookEx(_hookID, nCode, wParam, lParam);
+                    }
+
+                    if (!IsEnabled)
+                    {
+                        _lastPt = s.pt;
+                        return CallNextHookEx(_hookID, nCode, wParam, lParam);
+                    }
+
+                    // Click & Drag Protection (Fixes Ditto paste, text selection, and window dragging)
+                    if (ClickProtect)
+                    {
+                        bool isPhysicalButtonDown = _isButtonDown
+                            || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+                            || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0
+                            || (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
+                        bool isDebouncing = unchecked(now - _buttonUpTime) < 80;
+
+                        if (isPhysicalButtonDown || isDebouncing)
                         {
-                            mouse_event(0x0001, extra_x, extra_y, 0, (UIntPtr)MAGIC_ID);
-                            _lastPt.x = s.pt.x + extra_x;
-                            _lastPt.y = s.pt.y + extra_y;
+                            _lastPt = s.pt;
+                            _hasPt = true;
                             return CallNextHookEx(_hookID, nCode, wParam, lParam);
                         }
                     }
-                }
 
-                _lastPt = s.pt;
-                _hasPt = true;
+                    if (_hasPt)
+                    {
+                        int dx = s.pt.x - _lastPt.x;
+                        int dy = s.pt.y - _lastPt.y;
+
+                        if (dx != 0 || dy != 0)
+                        {
+                            double dist = Math.Sqrt(dx * dx + dy * dy);
+
+                            // Track high-speed movement for swipe tap filtering
+                            if (dist >= 7.0)
+                            {
+                                _lastFastMoveTime = now;
+                                _lastFastMoveDist = dist;
+                            }
+
+                            // Teleportation protection (SetCursorPos, SnapToDefaultButton, monitor wrapping)
+                            if (dist > 120)
+                            {
+                                _lastPt = s.pt;
+                                return CallNextHookEx(_hookID, nCode, wParam, lParam);
+                            }
+
+                            // Micro-jitter deadzone (Bluetooth trackpad sensor noise)
+                            if (dist <= 1.2)
+                            {
+                                _lastPt = s.pt;
+                                return CallNextHookEx(_hookID, nCode, wParam, lParam);
+                            }
+
+                            double mult = BaseMultiplier;
+
+                            if (PrecisionMode && dist <= 2.2)
+                            {
+                                mult = 1.0 + (BaseMultiplier - 1.0) * 0.35; // Gentle precision mode
+                            }
+                            else
+                            {
+                                if (FlickBoost > 0 && dist > 2.0)
+                                {
+                                    mult += Math.Min(FlickBoost, (dist - 2.0) * 0.45);
+                                }
+                            }
+
+                            int extra_x = (int)Math.Round(dx * (mult - 1.0));
+                            int extra_y = (int)Math.Round(dy * (mult - 1.0));
+
+                            if (extra_x != 0 || extra_y != 0)
+                            {
+                                mouse_event(0x0001, extra_x, extra_y, 0, (UIntPtr)MAGIC_ID);
+
+                                // Clamp to virtual screen boundaries to prevent screen-edge coordinate overflow
+                                int new_x = Math.Max(SystemInformation.VirtualScreen.Left,
+                                            Math.Min(SystemInformation.VirtualScreen.Right - 1, s.pt.x + extra_x));
+                                int new_y = Math.Max(SystemInformation.VirtualScreen.Top,
+                                            Math.Min(SystemInformation.VirtualScreen.Bottom - 1, s.pt.y + extra_y));
+
+                                _lastPt.x = new_x;
+                                _lastPt.y = new_y;
+                                return CallNextHookEx(_hookID, nCode, wParam, lParam);
+                            }
+                        }
+                    }
+
+                    _lastPt = s.pt;
+                    _hasPt = true;
+                }
             }
 
             return CallNextHookEx(_hookID, nCode, wParam, lParam);
@@ -572,6 +786,8 @@ namespace TouchpadTurbo
                             if (k == "BaseMultiplier") double.TryParse(v, out BaseMultiplier);
                             if (k == "FlickBoost") double.TryParse(v, out FlickBoost);
                             if (k == "PrecisionMode") bool.TryParse(v, out PrecisionMode);
+                            if (k == "ClickProtect") bool.TryParse(v, out ClickProtect);
+                            if (k == "SwipeTapFilter") bool.TryParse(v, out SwipeTapFilter);
                             if (k == "IsEnabled") bool.TryParse(v, out IsEnabled);
                         }
                     }
@@ -585,8 +801,8 @@ namespace TouchpadTurbo
             try
             {
                 var content = string.Format(
-                    "BaseMultiplier={0:F2}\r\nFlickBoost={1:F2}\r\nPrecisionMode={2}\r\nIsEnabled={3}\r\n",
-                    BaseMultiplier, FlickBoost, PrecisionMode, IsEnabled
+                    "BaseMultiplier={0:F2}\r\nFlickBoost={1:F2}\r\nPrecisionMode={2}\r\nClickProtect={3}\r\nSwipeTapFilter={4}\r\nIsEnabled={5}\r\n",
+                    BaseMultiplier, FlickBoost, PrecisionMode, ClickProtect, SwipeTapFilter, IsEnabled
                 );
                 File.WriteAllText(ConfigPath, content);
             }
@@ -597,25 +813,67 @@ namespace TouchpadTurbo
         {
             try
             {
-                if (enable)
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
                 {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    if (key != null)
                     {
-                        FileName = "schtasks.exe",
-                        Arguments = "/create /tn \"TouchpadTurbo\" /tr \"" + Application.ExecutablePath + "\" /sc onlogon /rl highest /f",
-                        CreateNoWindow = true,
-                        UseShellExecute = false
-                    });
+                        if (enable)
+                        {
+                            key.SetValue("TouchpadTurbo", "\"" + Application.ExecutablePath + "\"");
+                        }
+                        else
+                        {
+                            key.DeleteValue("TouchpadTurbo", false);
+                        }
+                    }
                 }
-                else
+            }
+            catch { }
+        }
+
+        private static bool IsAutoStartEnabled()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false))
                 {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    if (key != null)
                     {
-                        FileName = "schtasks.exe",
-                        Arguments = "/delete /tn \"TouchpadTurbo\" /f",
-                        CreateNoWindow = true,
-                        UseShellExecute = false
-                    });
+                        return key.GetValue("TouchpadTurbo") != null;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static int GetTouchpadSensitivity()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PrecisionTouchPad", false))
+                {
+                    if (key != null)
+                    {
+                        object obj = key.GetValue("AAPThreshold");
+                        if (obj is int) return (int)obj;
+                    }
+                }
+            }
+            catch { }
+            return 2;
+        }
+
+        private static void SetTouchpadSensitivity(int val)
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PrecisionTouchPad", true))
+                {
+                    if (key != null)
+                    {
+                        key.SetValue("AAPThreshold", val, RegistryValueKind.DWord);
+                    }
                 }
             }
             catch { }
@@ -629,19 +887,33 @@ namespace TouchpadTurbo
         [STAThread]
         static void Main()
         {
-            bool isNewInstance;
-            _singleMutex = new Mutex(true, "Global\\TouchpadTurbo_SingleInstance_Mutex_Unique", out isNewInstance);
-            if (!isNewInstance)
+            try
             {
-                // Another instance is already running! Silently exit to prevent duplicates.
-                return;
+                bool isNewInstance = true;
+                try
+                {
+                    _singleMutex = new Mutex(true, "TouchpadTurbo_SingleInstance_Mutex_Unique", out isNewInstance);
+                }
+                catch
+                {
+                    isNewInstance = true;
+                }
+
+                if (!isNewInstance)
+                {
+                    return;
+                }
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm());
+
+                if (_singleMutex != null)
+                {
+                    GC.KeepAlive(_singleMutex);
+                }
             }
-
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
-
-            GC.KeepAlive(_singleMutex);
+            catch { }
         }
     }
 }
